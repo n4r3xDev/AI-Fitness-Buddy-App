@@ -1,7 +1,16 @@
 import { Ionicons } from '@expo/vector-icons';
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
-import { ActivityIndicator, Alert, FlatList, ScrollView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import {
+  ActivityIndicator,
+  Alert,
+  FlatList, Modal, SafeAreaView,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View
+} from 'react-native';
 import { supabase } from '../../lib/supabase';
 
 type Tab = 'stats' | 'history' | 'settings';
@@ -17,6 +26,8 @@ export default function ProfileScreen() {
   const [prs, setPrs] = useState<Record<string, number>>({});
   const [stats, setStats] = useState({ workouts: 0, volume: 0 });
 
+  const [selectedLog, setSelectedLog] = useState<any>(null);
+
   useFocusEffect(
     useCallback(() => {
       fetchUserData();
@@ -28,7 +39,6 @@ export default function ProfileScreen() {
     try {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) {
-        // FIX: Use the exact path typed by Expo Router
         router.replace('/(auth)/login');
         return;
       }
@@ -84,8 +94,6 @@ export default function ProfileScreen() {
           if (!isNaN(w) && !isNaN(r) && w > 0) {
             totalVolume += w * r;
 
-            // --- SMART PR LOGIC (Epley Formula) ---
-            // Estimate 1RM: Weight * (1 + Reps/30)
             const e1rm = r === 1 ? w : w * (1 + r / 30);
             const rounded1RM = Math.round(e1rm);
 
@@ -111,10 +119,10 @@ export default function ProfileScreen() {
   // --- ACTIONS ---
   const handleSignOut = async () => {
     await supabase.auth.signOut();
-    // FIX: Correct route
     router.replace('/(auth)/login');
   };
 
+  // --- FIXED DELETE LOGIC ---
   const handleDeletePlan = () => {
     Alert.alert("Delete Current Plan?", "You will need to generate a new one.", [
         { text: "Cancel", style: "cancel" },
@@ -122,11 +130,27 @@ export default function ProfileScreen() {
             text: "Delete", 
             style: "destructive", 
             onPress: async () => {
-                const { data: { user } } = await supabase.auth.getUser();
-                if(user) {
-                    await supabase.from('plans').delete().eq('user_id', user.id);
-                    Alert.alert("Deleted", "Plan removed.");
-                    router.push('/(tabs)');
+                setLoading(true); // Show loading
+                try {
+                    const { data: { user } } = await supabase.auth.getUser();
+                    if (!user) return;
+
+                    // Execute Delete
+                    const { error } = await supabase
+                        .from('plans')
+                        .delete()
+                        .eq('user_id', user.id);
+
+                    if (error) {
+                        throw error;
+                    }
+
+                    Alert.alert("Success", "Plan deleted successfully.");
+                    // Force navigation to dashboard to reset state
+                    router.replace('/(tabs)');
+                } catch (e: any) {
+                    Alert.alert("Error", e.message || "Failed to delete plan.");
+                    setLoading(false);
                 }
             }
         }
@@ -147,7 +171,6 @@ export default function ProfileScreen() {
                     await supabase.from('plans').delete().eq('user_id', user.id);
                     await supabase.from('profiles').delete().eq('id', user.id);
                     await supabase.auth.signOut();
-                    // FIX: Correct route
                     router.replace('/(auth)/login');
                 }
             }
@@ -196,20 +219,25 @@ export default function ProfileScreen() {
       contentContainerStyle={{ paddingBottom: 20 }}
       ListEmptyComponent={<Text style={styles.emptyText}>No workouts yet.</Text>}
       renderItem={({ item }) => (
-        <View style={styles.historyCard}>
+        <TouchableOpacity 
+            style={styles.historyCard} 
+            onPress={() => setSelectedLog(item)} 
+        >
             <View style={styles.historyHeader}>
                 <Text style={styles.historyDate}>{new Date(item.created_at).toLocaleDateString()}</Text>
-                <Text style={styles.historyTime}>
-                    {item.notes?.includes('Duration:') ? item.notes.split('Duration: ')[1] : ''}
-                </Text>
+                <View style={styles.historyBadges}>
+                    <Text style={styles.historyTime}>
+                        {item.notes?.includes('Duration:') ? item.notes.split('Duration: ')[1] : ''}
+                    </Text>
+                    <Ionicons name="chevron-forward" size={16} color="#ccc" style={{marginLeft: 5}} />
+                </View>
             </View>
             <Text style={styles.historyRpe}>
                 Avg RPE: {item.rpe} • <Text style={{fontWeight: 'bold', color: item.fatigue_level === 'high' ? 'red' : item.fatigue_level === 'low' ? 'green' : 'orange'}}>
                     {item.fatigue_level?.toUpperCase()}
                 </Text> Fatigue
             </Text>
-            {item.notes ? <Text style={styles.historyNotes} numberOfLines={1}>{item.notes.split('\n')[0]}</Text> : null}
-        </View>
+        </TouchableOpacity>
       )}
     />
   );
@@ -241,6 +269,7 @@ export default function ProfileScreen() {
 
   return (
     <View style={styles.container}>
+      {/* HEADER */}
       <View style={styles.header}>
         <View style={styles.avatar}>
             <Text style={styles.avatarText}>{profile?.goal?.[0]?.toUpperCase() || 'U'}</Text>
@@ -268,6 +297,85 @@ export default function ProfileScreen() {
         {activeTab === 'history' && renderHistory()}
         {activeTab === 'settings' && renderSettings()}
       </View>
+
+      {/* --- LOG DETAIL MODAL --- */}
+      <Modal visible={selectedLog !== null} animationType="slide" presentationStyle="pageSheet">
+        {selectedLog && (
+            <SafeAreaView style={{flex: 1, backgroundColor: '#f4f6f9'}}>
+                <View style={styles.modalHeader}>
+                    <View>
+                        <Text style={styles.modalTitle}>{new Date(selectedLog.created_at).toLocaleDateString()}</Text>
+                        <Text style={styles.modalSubtitle}>Workout Details</Text>
+                    </View>
+                    <TouchableOpacity onPress={() => setSelectedLog(null)} style={styles.closeBtn}>
+                        <Ionicons name="close" size={24} color="#333" />
+                    </TouchableOpacity>
+                </View>
+
+                <ScrollView contentContainerStyle={{padding: 20}}>
+                    {/* STATS SUMMARY */}
+                    <View style={styles.summaryCard}>
+                        <View style={styles.summaryItem}>
+                            <Text style={styles.summaryLabel}>Avg RPE</Text>
+                            <Text style={styles.summaryValue}>{selectedLog.rpe}/10</Text>
+                        </View>
+                        <View style={styles.summaryItem}>
+                            <Text style={styles.summaryLabel}>Fatigue</Text>
+                            <Text style={[styles.summaryValue, {textTransform: 'capitalize'}]}>{selectedLog.fatigue_level}</Text>
+                        </View>
+                        <View style={styles.summaryItem}>
+                            <Text style={styles.summaryLabel}>Sets</Text>
+                            <Text style={styles.summaryValue}>
+                                {selectedLog.exercise_data?.reduce((acc: number, ex: any) => acc + (ex.sets?.length || 0), 0) || 0}
+                            </Text>
+                        </View>
+                    </View>
+
+                    {/* NOTES SECTION */}
+                    {selectedLog.notes && (
+                        <View style={styles.notesBox}>
+                            <Text style={styles.sectionHeader}>Notes</Text>
+                            <Text style={styles.notesText}>{selectedLog.notes}</Text>
+                        </View>
+                    )}
+
+                    {/* EXERCISE LIST */}
+                    <Text style={[styles.sectionHeader, {marginTop: 20}]}>Exercises</Text>
+                    {selectedLog.exercise_data?.map((ex: any, i: number) => (
+                        <View key={i} style={styles.logExerciseCard}>
+                            <Text style={styles.logExerciseName}>{ex.name}</Text>
+                            
+                            <View style={styles.setTable}>
+                                <View style={styles.setRowHeader}>
+                                    <Text style={[styles.setCell, styles.setHeaderCell]}>Set</Text>
+                                    <Text style={[styles.setCell, styles.setHeaderCell]}>Kg</Text>
+                                    <Text style={[styles.setCell, styles.setHeaderCell]}>Reps</Text>
+                                    <Text style={[styles.setCell, styles.setHeaderCell]}>RPE</Text>
+                                </View>
+                                {ex.sets?.map((set: any, j: number) => (
+                                    <View key={j} style={[styles.setRow, set.type === 'W' && {backgroundColor: '#fffbeb'}]}>
+                                        <View style={[styles.setBadge, 
+                                            set.type === 'W' ? {backgroundColor: '#fff3cd'} : 
+                                            set.type === 'D' ? {backgroundColor: '#e8daff'} : 
+                                            set.type === 'F' ? {backgroundColor: '#f8d7da'} : {}
+                                        ]}>
+                                            <Text style={styles.setBadgeText}>
+                                                {set.type === 'N' ? j + 1 : set.type}
+                                            </Text>
+                                        </View>
+                                        <Text style={styles.setCell}>{set.weight || '-'}</Text>
+                                        <Text style={styles.setCell}>{set.reps || '0'}</Text>
+                                        <Text style={styles.setCell}>{set.rpe || '-'}</Text>
+                                    </View>
+                                ))}
+                            </View>
+                        </View>
+                    ))}
+                </ScrollView>
+            </SafeAreaView>
+        )}
+      </Modal>
+
     </View>
   );
 }
@@ -298,15 +406,45 @@ const styles = StyleSheet.create({
   prValue: { fontSize: 16, fontWeight: 'bold', color: '#007AFF' },
   infoBox: { backgroundColor: '#fff', borderRadius: 16, padding: 20 },
   infoText: { fontSize: 15, color: '#555', marginBottom: 8, textTransform: 'capitalize' },
+  
+  // HISTORY LIST
   historyCard: { backgroundColor: '#fff', padding: 15, borderRadius: 16, marginBottom: 10, shadowColor: '#000', shadowOpacity: 0.03, shadowRadius: 3 },
   historyHeader: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 5 },
   historyDate: { fontSize: 16, fontWeight: '700', color: '#333' },
+  historyBadges: { flexDirection: 'row', alignItems: 'center' },
   historyTime: { fontSize: 14, color: '#007AFF', fontWeight: '600' },
-  historyRpe: { fontSize: 13, color: '#555', marginBottom: 5 },
-  historyNotes: { fontSize: 14, color: '#888', fontStyle: 'italic' },
+  historyRpe: { fontSize: 13, color: '#555' },
   emptyText: { textAlign: 'center', color: '#999', marginTop: 50 },
+  
+  // SETTINGS
   settingBtn: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', padding: 16, borderRadius: 12, marginBottom: 10, shadowColor: '#000', shadowOpacity: 0.03, shadowRadius: 3 },
   settingText: { fontSize: 16, marginLeft: 12, fontWeight: '500', color: '#333' },
   dangerBtn: { backgroundColor: '#ff3b30' },
-  dangerDesc: { fontSize: 12, color: '#999', marginLeft: 5, marginTop: -5 }
+  dangerDesc: { fontSize: 12, color: '#999', marginLeft: 5, marginTop: -5 },
+
+  // --- MODAL STYLES ---
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', padding: 20, backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#eee' },
+  modalTitle: { fontSize: 20, fontWeight: '800', color: '#333' },
+  modalSubtitle: { fontSize: 14, color: '#888' },
+  closeBtn: { padding: 8, backgroundColor: '#f0f0f0', borderRadius: 20 },
+  
+  summaryCard: { flexDirection: 'row', backgroundColor: '#fff', borderRadius: 16, padding: 20, marginBottom: 20 },
+  summaryItem: { flex: 1, alignItems: 'center' },
+  summaryLabel: { fontSize: 12, color: '#888', marginBottom: 4, textTransform: 'uppercase' },
+  summaryValue: { fontSize: 18, fontWeight: '700', color: '#333' },
+
+  notesBox: { backgroundColor: '#fff', borderRadius: 16, padding: 15, marginBottom: 20 },
+  sectionHeader: { fontSize: 16, fontWeight: '700', marginBottom: 8, color: '#333' },
+  notesText: { fontSize: 14, color: '#555', lineHeight: 20 },
+
+  logExerciseCard: { backgroundColor: '#fff', borderRadius: 16, padding: 15, marginBottom: 15 },
+  logExerciseName: { fontSize: 16, fontWeight: '700', marginBottom: 10, color: '#007AFF' },
+  setTable: { gap: 8 },
+  setRowHeader: { flexDirection: 'row', marginBottom: 5, paddingHorizontal: 10 },
+  setRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 8, borderBottomWidth: 1, borderBottomColor: '#f9f9f9' },
+  setCell: { flex: 1, textAlign: 'center', fontSize: 14, fontWeight: '600', color: '#444' },
+  setHeaderCell: { color: '#999', fontSize: 12, textTransform: 'uppercase' },
+  
+  setBadge: { width: 30, height: 24, backgroundColor: '#f0f0f0', borderRadius: 6, justifyContent: 'center', alignItems: 'center', marginLeft: 10, marginRight: 10 },
+  setBadgeText: { fontSize: 12, fontWeight: '700', color: '#555' }
 });

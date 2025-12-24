@@ -5,6 +5,8 @@ import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacit
 import { generateTrainingPlan } from '../../lib/ai-service';
 import { getValidSplits } from '../../lib/splits';
 import { supabase } from '../../lib/supabase';
+// 1. IMPORT YOUR DATABASE
+import { EXERCISE_DATABASE } from '../../data/exercises';
 
 export default function OnboardingScreen() {
   const router = useRouter();
@@ -17,7 +19,7 @@ export default function OnboardingScreen() {
     equipment: [] as string[],
     days_per_week: 3,
     session_duration_minutes: 60,
-    split: '' // New field
+    split: '' 
   });
 
   const toggleEquipment = (item: string) => {
@@ -28,7 +30,6 @@ export default function OnboardingScreen() {
   };
 
   const handleNext = () => {
-    // Validation for Split Selection (Step 4)
     if (step === 4 && !formData.split) {
         return Alert.alert("Select a Split", "Please choose a workout style.");
     }
@@ -60,7 +61,13 @@ export default function OnboardingScreen() {
 
       // 2. Generate Plan
       console.log("3. Calling AI Service...");
-      const plan = await generateTrainingPlan(formData);
+      
+      // --- CRITICAL UPDATE: PASS THE DATABASE HERE ---
+      const plan = await generateTrainingPlan({
+          ...formData,
+          availableExercises: EXERCISE_DATABASE // <--- Passing the "Menu" to the Chef
+      });
+      
       console.log("4. AI Response:", JSON.stringify(plan, null, 2));
 
       // 3. Save Plan
@@ -85,6 +92,7 @@ export default function OnboardingScreen() {
     }
   };
 
+  // ... (The rest of your render code stays exactly the same) ...
   const renderStep = () => {
     switch (step) {
       case 0: // Goal
@@ -220,7 +228,6 @@ export default function OnboardingScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Header Progress */}
       <View style={styles.header}>
         <TouchableOpacity onPress={handleBack} style={styles.backBtn}>
             <Ionicons name="arrow-back" size={24} color="#333" />
@@ -257,11 +264,9 @@ const styles = StyleSheet.create({
   progressContainer: { flex: 1, height: 6, backgroundColor: '#f0f0f0', borderRadius: 3, overflow: 'hidden' },
   progressBar: { height: '100%', backgroundColor: '#007AFF' },
   stepCounter: { marginLeft: 10, fontWeight: 'bold', color: '#666' },
-  
   content: { padding: 20 },
   title: { fontSize: 28, fontWeight: '800', marginBottom: 10, color: '#1c1c1e' },
   subtitle: { fontSize: 16, color: '#666', marginBottom: 20 },
-  
   option: { 
     padding: 20, borderRadius: 12, backgroundColor: '#f9f9f9', marginBottom: 12, 
     flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
@@ -270,7 +275,6 @@ const styles = StyleSheet.create({
   activeOption: { backgroundColor: '#007AFF', borderColor: '#007AFF' },
   optionText: { fontSize: 16, fontWeight: '600', color: '#333' },
   activeOptionText: { color: '#fff' },
-  
   label: { fontSize: 18, fontWeight: '600', marginBottom: 15 },
   row: { flexDirection: 'row', gap: 10, flexWrap: 'wrap' },
   chip: { 
@@ -280,8 +284,6 @@ const styles = StyleSheet.create({
   activeChip: { backgroundColor: '#007AFF', borderColor: '#007AFF' },
   chipText: { fontSize: 16, fontWeight: 'bold', color: '#333' },
   activeChipText: { color: '#fff' },
-
-  // Split Cards
   cardOption: {
     padding: 20, borderRadius: 16, backgroundColor: '#fff', marginBottom: 15,
     borderWidth: 1, borderColor: '#e0e0e0', flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
@@ -292,11 +294,9 @@ const styles = StyleSheet.create({
   activeText: { color: '#007AFF' },
   cardDesc: { fontSize: 14, color: '#666' },
   activeDesc: { color: '#444' },
-
   summaryCard: { backgroundColor: '#f9f9f9', padding: 20, borderRadius: 12, marginBottom: 20 },
   summaryItem: { fontSize: 16, marginBottom: 8, color: '#333', fontWeight: '500' },
   infoText: { fontSize: 14, color: '#666', lineHeight: 20 },
-
   footer: { padding: 20, borderTopWidth: 1, borderTopColor: '#f0f0f0' },
   primaryBtn: { backgroundColor: '#007AFF', padding: 18, borderRadius: 16, alignItems: 'center' },
   btnText: { color: '#fff', fontSize: 18, fontWeight: 'bold' }

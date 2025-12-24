@@ -1,15 +1,17 @@
 import cors from 'cors';
 import express from 'express';
 import { Ollama } from 'ollama';
-import { EXERCISE_DATABASE } from './exercises';
+import { EXERCISE_DATABASE } from '../../data/exercises';
 
 const app = express();
 const port = 3000;
 
-const ollama = new Ollama({ host: 'http://127.0.0.1:11434' });
-
+// Increase limit to allow sending large exercise lists
+app.use(express.json({ limit: '10mb' }));
 app.use(cors());
-app.use(express.json());
+
+// Configure Ollama
+const ollama = new Ollama({ host: 'http://127.0.0.1:11434' });
 
 const SPLIT_TEMPLATES: Record<string, string[]> = {
   'Full Body': ['Full Body A', 'Full Body B', 'Full Body C'],
@@ -22,18 +24,28 @@ const SPLIT_TEMPLATES: Record<string, string[]> = {
 };
 
 app.post('/generate-plan', async (req, res) => {
-  const { goal, experience, equipment, days, duration, split } = req.body;
+  const { goal, experience, equipment, days, split, availableExercises } = req.body;
   const dayCount = parseInt(days) || 3;
-
-  console.log(`Generating STRICT plan: ${split} (${dayCount} days) using Llama3.2`);
-
+  
+  // 1. Determine the split BEFORE logging so we see the real value
   const safeSplit = split || 'Full Body';
+
+  // 2. Updated Log: Now explicitly shows the split being sent to Llama
+  console.log(`Generating plan for: ${experience} ${goal} (${dayCount} days) - Split: ${safeSplit}`);
+
+  const sourceExercises = (availableExercises && availableExercises.length > 0) 
+    ? availableExercises 
+    : EXERCISE_DATABASE;
+
+  const optimizedExerciseList = sourceExercises.map((ex: any) => 
+    `- ${ex.name} (${ex.muscle})`
+  ).join('\n');
+
   let dayNames = SPLIT_TEMPLATES[safeSplit] || Array.from({ length: dayCount }, (_, i) => `Day ${i + 1}`);
   dayNames = dayNames.filter(d => d !== 'Rest').slice(0, dayCount);
 
   const prompt = `
-    You are an elite strength coach.
-    Create a 1-week workout plan.
+    You are an elite strength coach. Create a 1-week workout plan.
     
     USER CONTEXT:
     - Goal: ${goal}
@@ -44,10 +56,13 @@ app.post('/generate-plan', async (req, res) => {
     STRICT RULES:
     1. Structure: Generate exactly ${dayCount} days.
     2. Day Names: Use exactly: ${JSON.stringify(dayNames)}.
-    3. Volume: EXACTLY 6 exercises per day.
-    4. Database: Use ONLY these exercises: ${JSON.stringify(EXERCISE_DATABASE)}
+    3. Volume: 6-8 exercises per day.
+    4. Database: You must ONLY select exercises from the list below. Do not invent names.
     
-    OUTPUT JSON ONLY:
+    ALLOWED EXERCISES:
+    ${optimizedExerciseList}
+    
+    OUTPUT JSON ONLY (this exact format, there could be more exercises, adjust reps, sets and rest as needed):
     {
       "week_number": 1,
       "days": [
@@ -55,51 +70,49 @@ app.post('/generate-plan', async (req, res) => {
           "day_name": "${dayNames[0]}", 
           "focus": "Target Muscle", 
           "exercises": [
-             { "name": "Compound Lift", "sets": 3, "reps": "6-8", "rest": "120s" },
-             { "name": "Accessory Lift", "sets": 3, "reps": "8-12", "rest": "90s" },
-             { "name": "Accessory Lift", "sets": 3, "reps": "8-12", "rest": "90s" },
-             { "name": "Isolation Lift", "sets": 3, "reps": "12-15", "rest": "60s" },
-             { "name": "Isolation Lift", "sets": 3, "reps": "12-15", "rest": "60s" },
-             { "name": "Isolation Lift", "sets": 3, "reps": "15-20", "rest": "60s" }
+             { "name": "Exact Name From List", "sets": 3, "reps": "5", "rest": "120s" },
+             { "name": "Exact Name From List", "sets": 3, "reps": "8", "rest": "90s" },
+             { "name": "Exact Name From List", "sets": 3, "reps": "12", "rest": "90s" },
+             { "name": "Exact Name From List", "sets": 3, "reps": "12", "rest": "90s" },
+             { "name": "Exact Name From List", "sets": 3, "reps": "12", "rest": "90s" },
+             { "name": "Exact Name From List", "sets": 3, "reps": "12", "rest": "90s" }
           ] 
         }
       ]
     }
   `;
 
-  // --- TIMEOUT CONFIGURATION ---
+  // ... (Rest of the code remains the same: Controller, fetch, response handling) ...
+  
   const controller = new AbortController();
-  // Set timeout to 300 seconds (5 minutes)
   const timeoutId = setTimeout(() => controller.abort(), 300000); 
 
   try {
-    // We use raw fetch instead of the library to control the timeout
     const response = await fetch('http://127.0.0.1:11434/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        model: 'llama3.2', // <--- Ensure you pulled this model!
+        model: 'llama3.2',
         messages: [{ role: 'user', content: prompt }],
         format: 'json',
         stream: false,
         options: {
-           temperature: 0.2, // Low creativity = better structure compliance
-           num_ctx: 4096     // Ensure enough memory context
+           temperature: 0.2,
+           num_ctx: 4096 
         }
       }),
       signal: controller.signal
     });
 
-    clearTimeout(timeoutId); // Clear timer if successful
+    clearTimeout(timeoutId);
 
     if (!response.ok) {
         throw new Error(`Ollama API Error: ${response.statusText}`);
     }
 
-    const data = await response.json(); // Type checking skipped for brevity
+    const data = await response.json();
     let rawContent = (data as any).message.content;
     
-    // Clean Markdown
     rawContent = rawContent.replace(/```json/g, '').replace(/```/g, '');
     const firstBrace = rawContent.indexOf('{');
     const lastBrace = rawContent.lastIndexOf('}');
@@ -114,7 +127,7 @@ app.post('/generate-plan', async (req, res) => {
     clearTimeout(timeoutId);
     console.error("AI Generation Failed:", error);
     if (error.name === 'AbortError') {
-        res.status(504).json({ error: "AI took too long to respond (Timeout)." });
+        res.status(504).json({ error: "AI took too long to respond." });
     } else {
         res.status(500).json({ error: error.message || "Unknown error" });
     }

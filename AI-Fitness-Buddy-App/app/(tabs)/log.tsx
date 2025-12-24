@@ -19,6 +19,7 @@ import {
 import { supabase } from '../../lib/supabase';
 import { WorkoutDay } from '../../types';
 
+// --- TYPES ---
 type SetType = 'N' | 'W' | 'D' | 'F';
 
 interface SetLog {
@@ -56,6 +57,7 @@ export default function LogWorkoutScreen() {
   const [typeModalVisible, setTypeModalVisible] = useState(false);
   const [selectedSetLocation, setSelectedSetLocation] = useState<{exIndex: number, setIndex: number} | null>(null);
 
+  // Timers
   const [restTimerActive, setRestTimerActive] = useState(false);
   const [restTimeLeft, setRestTimeLeft] = useState(0);
   const restTimerRef = useRef<any>(null); 
@@ -115,7 +117,6 @@ export default function LogWorkoutScreen() {
     if (restTimerRef.current) clearTimeout(restTimerRef.current);
   };
 
-  // Helper function for setTimeLeft alias
   const setTimeLeft = (sec: number) => setRestTimeLeft(sec);
 
   const formatTime = (sec: number) => {
@@ -132,6 +133,7 @@ export default function LogWorkoutScreen() {
     return `${m}:${s < 10 ? '0' : ''}${s}`;
   };
 
+  // --- ROBUST FETCHING LOGIC (The Fix) ---
   const fetchCurrentWorkout = async () => {
     setLoading(true);
     try {
@@ -152,7 +154,7 @@ export default function LogWorkoutScreen() {
         const idx = Number(workoutIndex) || 0;
         let day: WorkoutDay | null = null;
 
-        if (planData.weeks && Array.isArray(planData.weeks)) {
+        if (planData.weeks && Array.isArray(planData.weeks) && planData.weeks.length > 0) {
            const allDays = planData.weeks.flatMap((w: any) => w.days || []);
            day = allDays[idx];
         } else if (planData.days && Array.isArray(planData.days)) {
@@ -161,22 +163,53 @@ export default function LogWorkoutScreen() {
 
         if (day) {
           setDayName(day.day_name || `Workout ${idx + 1}`);
+          
           const initialLogs: ExerciseLog[] = (day.exercises || []).map((ex: any) => {
-            const rawReps = ex.reps ? ex.reps.toString() : '10';
-            const cleanReps = rawReps.split('-')[0].replace(/[^0-9]/g, '') || '10';
-            const defaultRest = ex.rest ? ex.rest.replace('s', '') : '60';
+            // Determine set count safely
+            const setCount = Number(ex.sets) || 3;
 
             return {
               name: ex.name,
-              sets: Array.from({ length: ex.sets || 3 }).map((_, i) => ({
-                id: `${Math.random()}`, 
-                type: 'N',
-                weight: '',
-                reps: cleanReps,
-                rpe: '', 
-                rest: defaultRest,
-                completed: false
-              }))
+              sets: Array.from({ length: setCount }).map((_, i) => {
+                
+                // 1. REPS: Handle Array or String
+                let rawReps = '10';
+                if (Array.isArray(ex.reps)) {
+                    rawReps = ex.reps[i] || ex.reps[0] || '10';
+                } else if (ex.reps) {
+                    rawReps = String(ex.reps);
+                }
+
+                // 2. REST: Handle Array or String (CRASH FIX)
+                let rawRest = '60';
+                if (Array.isArray(ex.rest)) {
+                    rawRest = ex.rest[i] || ex.rest[0] || '60';
+                } else if (ex.rest) {
+                    rawRest = String(ex.rest);
+                }
+
+                // 3. WEIGHT: Handle Array (New Feature)
+                let rawWeight = '';
+                if (Array.isArray(ex.weights)) {
+                    rawWeight = ex.weights[i] || '';
+                }
+
+                // 4. TYPE: Handle Array (New Feature)
+                let rawType: SetType = 'N';
+                if (Array.isArray(ex.setTypes)) {
+                    rawType = (ex.setTypes[i] as SetType) || 'N';
+                }
+
+                return {
+                  id: `${Math.random()}`, 
+                  type: rawType,
+                  weight: rawWeight,
+                  reps: rawReps.replace(/[^0-9]/g, ''), // Strip "12-15" to "1215" (simplified) or regex
+                  rpe: '', 
+                  rest: rawRest.replace(/[^0-9]/g, ''), // Strip "s" safely
+                  completed: false
+                };
+              })
             };
           });
           setLogs(initialLogs);
@@ -296,7 +329,6 @@ export default function LogWorkoutScreen() {
       const durationStr = `Duration: ${formatDuration(workoutSeconds)}`;
       const finalNotes = notes ? `${notes}\n\n${durationStr}` : durationStr;
 
-      // --- 3-TIER FATIGUE LOGIC ---
       let fatigue = 'medium';
       if (avgRpe >= 8) fatigue = 'high';
       else if (avgRpe <= 5) fatigue = 'low';
@@ -307,7 +339,7 @@ export default function LogWorkoutScreen() {
         rpe: avgRpe, 
         notes: finalNotes,
         exercise_data: logs,
-        fatigue_level: fatigue // Saving calculated fatigue
+        fatigue_level: fatigue
       });
 
       Alert.alert('Workout Finished', `Great job! Time: ${formatDuration(workoutSeconds)}`);
