@@ -3,7 +3,7 @@
 export const generateTrainingPlan = async (data: any) => {
   try {
     // We expect 'data' to now contain 'availableExercises'
-    const response = await fetch('http://192.168.1.14:3000/generate-plan', { // Use your local IP
+    const response = await fetch('http://192.168.0.31:3000/generate-plan', { // Use your local IP
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({

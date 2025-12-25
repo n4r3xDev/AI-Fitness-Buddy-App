@@ -18,6 +18,8 @@ import {
 } from 'react-native';
 import { supabase } from '../../lib/supabase';
 import { WorkoutDay } from '../../types';
+// --- NEW IMPORT ---
+import { calculateVolume, countPRs } from '../../lib/workoutStats';
 
 // --- TYPES ---
 type SetType = 'N' | 'W' | 'D' | 'F';
@@ -47,7 +49,7 @@ const SET_TYPES: { id: SetType; name: string; color: string; textColor: string; 
 export default function LogWorkoutScreen() {
   const router = useRouter();
   const { workoutIndex, sessionID } = useLocalSearchParams();
-  
+   
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [dayName, setDayName] = useState("");
@@ -133,7 +135,7 @@ export default function LogWorkoutScreen() {
     return `${m}:${s < 10 ? '0' : ''}${s}`;
   };
 
-  // --- ROBUST FETCHING LOGIC (The Fix) ---
+  // --- ROBUST FETCHING LOGIC ---
   const fetchCurrentWorkout = async () => {
     setLoading(true);
     try {
@@ -148,7 +150,7 @@ export default function LogWorkoutScreen() {
           .order('created_at', { ascending: false })
           .limit(1)
           .single();
-      
+       
       if (data && data.data) {
         const planData = data.data;
         const idx = Number(workoutIndex) || 0;
@@ -188,13 +190,13 @@ export default function LogWorkoutScreen() {
                     rawRest = String(ex.rest);
                 }
 
-                // 3. WEIGHT: Handle Array (New Feature)
+                // 3. WEIGHT: Handle Array
                 let rawWeight = '';
                 if (Array.isArray(ex.weights)) {
                     rawWeight = ex.weights[i] || '';
                 }
 
-                // 4. TYPE: Handle Array (New Feature)
+                // 4. TYPE: Handle Array
                 let rawType: SetType = 'N';
                 if (Array.isArray(ex.setTypes)) {
                     rawType = (ex.setTypes[i] as SetType) || 'N';
@@ -204,9 +206,9 @@ export default function LogWorkoutScreen() {
                   id: `${Math.random()}`, 
                   type: rawType,
                   weight: rawWeight,
-                  reps: rawReps.replace(/[^0-9]/g, ''), // Strip "12-15" to "1215" (simplified) or regex
+                  reps: rawReps.replace(/[^0-9]/g, ''), 
                   rpe: '', 
-                  rest: rawRest.replace(/[^0-9]/g, ''), // Strip "s" safely
+                  rest: rawRest.replace(/[^0-9]/g, ''), 
                   completed: false
                 };
               })
@@ -312,6 +314,7 @@ export default function LogWorkoutScreen() {
     setLogs(newLogs);
   };
 
+  // --- UPDATED FINISH HANDLER ---
   const handleFinish = async () => {
     if (workoutIntervalRef.current) clearInterval(workoutIntervalRef.current);
     if (restTimerRef.current) clearTimeout(restTimerRef.current);
@@ -319,6 +322,8 @@ export default function LogWorkoutScreen() {
     setSaving(true);
     try {
       const { data: { user } } = await supabase.auth.getUser();
+      
+      // Calculate Avg RPE
       let totalRpe = 0;
       let count = 0;
       logs.forEach(ex => ex.sets.forEach(s => {
@@ -333,6 +338,7 @@ export default function LogWorkoutScreen() {
       if (avgRpe >= 8) fatigue = 'high';
       else if (avgRpe <= 5) fatigue = 'low';
 
+      // 1. Save to Database
       await supabase.from('workout_logs').insert({
         user_id: user!.id,
         workout_day_index: Number(workoutIndex),
@@ -342,8 +348,23 @@ export default function LogWorkoutScreen() {
         fatigue_level: fatigue
       });
 
-      Alert.alert('Workout Finished', `Great job! Time: ${formatDuration(workoutSeconds)}`);
-      router.back();
+      // 2. Calculate Stats for Summary
+      const volume = calculateVolume(logs);
+      const prs = countPRs(logs, []); // Pass [] or user history if available
+
+      // 3. Navigate to Summary
+      // We use 'replace' or 'push' to go to the summary screen
+      router.push({
+        pathname: '/workout/summary',
+        params: {
+          workoutName: dayName,
+          durationSeconds: workoutSeconds,
+          totalVolume: volume,
+          totalWorkouts: 15, // Placeholder - ideally fetch count from DB
+          prCount: prs
+        }
+      });
+
     } catch (e: any) {
       Alert.alert('Error', e.message);
     } finally {
